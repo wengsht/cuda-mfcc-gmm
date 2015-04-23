@@ -114,7 +114,7 @@ On this small test, we get `7x` speedup(100 wav files, 21420 frames). If we test
 
 ### Spoofing Countermeasure (GMM Training Big Test)
 
-Before you start running this, please download the mfcc features files on dropbox (`mfcc.zip`).
+Before you start running this, please download the mfcc features files from here: [mfcc.zip](http://pan.baidu.com/s/1uF6LS).
 
     cd cuda-mfcc-gmm/RunEnv
     unzip mfcc.zip
