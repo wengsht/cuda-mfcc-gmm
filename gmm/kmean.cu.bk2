@@ -1,0 +1,449 @@
+
+#include "kmean.h"
+
+#include "Feat_comm.h"
+#include "memory_srlr.h"
+#include "kmean_kernel.h"
+
+#define LOG2PI (log(2*PI))
+
+KMean::KMean() {
+    m_WeightIndex = NULL;
+    
+    dimObjects = NULL;
+    dimClusters = NULL;
+    memberShip = NULL;
+    device_memberShip = NULL;
+    device_dimObjects = NULL;
+    
+    clusterSize = NULL;
+    device_clusterSize = NULL;
+    
+    device_dimClusters = NULL;
+    
+    dimDiagCovs = NULL;
+    device_diagCovs = NULL;
+    
+    dMats = NULL;
+    device_dMats = NULL;
+}
+
+KMean::~KMean() {
+    if(m_WeightIndex) {
+        free(m_WeightIndex);
+        m_WeightIndex=NULL;	
+    }
+    
+    Free2D(dimObjects);
+    Free2D(dimClusters);
+    
+    Free(memberShip);
+    
+    if(device_dimObjects) {
+        cudaFree(device_dimObjects);
+        device_dimObjects = NULL;
+    }
+    
+    if(device_memberShip) {
+        cudaFree(device_memberShip);
+        device_memberShip = NULL;
+    }
+    
+    if(device_clusterSize) {
+        cudaFree(device_clusterSize);
+        device_clusterSize = NULL;
+    }
+    Free(clusterSize);
+    
+    Free2D(dimDiagCovs);
+    
+    if(device_diagCovs) {
+        cudaFree(device_diagCovs);
+        
+        device_diagCovs = NULL;
+    }
+    
+    Free(dMats);
+    if(device_dMats) {
+        cudaFree(device_dMats);
+        device_dMats = NULL;
+    }
+    /*
+    if(dimObjects) {
+        free(dimObjects);
+        free(dimObjects[0]);
+        
+        dimObjects = NULL;
+    }
+    */
+}
+
+int KMean::SingleChoose(float* sfeat,GaussMixModel * GMMModel,int ModelIndex)
+{
+    float MinDis=100000000000.0f;
+    int   MinIndex;
+    for(int m=0;m<GMMModel[ModelIndex].nMixNum;m++)
+    {
+        float TempDis=0.0f;
+        for(int i=0;i<m_nVecSize;i++)
+        {
+            float t=0.0f;
+            t=sfeat[i]-GMMModel[ModelIndex].pGauss[m].pfMean[i];
+            TempDis+=t*t;
+        }
+        if(TempDis<MinDis)
+        {
+            MinDis=TempDis;
+            MinIndex=m;
+        }
+    }
+    return MinIndex;
+}
+
+
+/* final solution 
+void KMean::KMeanCluster2() {
+    int numOfBlock = (numObjs - 1) / FIND_NEAREST_BLOCKSIZE + 1;
+    int shareMemorySize = numDims * numClusters * sizeof(float);
+    
+    cuda_find_nearest_cluster<<<numOfBlock, FIND_NEAREST_BLOCKSIZE, shareMemorySize>>>(device_dimObjects, device_dimClusters, numObjs, numDims, numClusters, device_memberShip);
+    
+    numOfBlock = (numObjs - 1) / ACCUMULATE_BLOCKSIZE + 1;
+    cudaMemset(device_dimClusters, 0, numClusters * numDims * sizeof(float));
+    cudaMemset(device_clusterSize, 0, numClusters * sizeof(int));
+    
+    cuda_accumulate_clusters<<<numOfBlock, ACCUMULATE_BLOCKSIZE>>>(device_dimObjects, device_memberShip, numObjs, numDims, numClusters, device_clusterSize, device_dimClusters);
+    
+    cuda_average_clusters<<<numDims, numClusters>>> (device_clusterSize, device_dimClusters);
+}
+    */
+
+void KMean::KMeanCluster2() {
+    int numOfBlock = (numObjs - 1) / FIND_NEAREST_BLOCKSIZE + 1;
+    int shareMemorySize = numDims * numClusters * sizeof(float);
+    
+    cuda_find_nearest_cluster<<<numOfBlock, FIND_NEAREST_BLOCKSIZE, shareMemorySize>>>(device_dimObjects, device_dimClusters, numObjs, numDims, numClusters, device_memberShip);
+    
+    numOfBlock = (numObjs - 1) / ACCUMULATE_BLOCKSIZE + 1;
+    cudaMemset(device_dimClusters, 0, numClusters * numDims * sizeof(float));
+    cudaMemset(device_clusterSize, 0, numClusters * sizeof(int));
+    
+    cuda_accumulate_clusters<<<numOfBlock, ACCUMULATE_BLOCKSIZE>>>(device_dimObjects, device_memberShip, numObjs, numDims, numClusters, device_clusterSize, device_dimClusters);
+    
+    cuda_average_clusters<<<numDims, numClusters>>> (device_clusterSize, device_dimClusters);
+}
+
+
+void KMean::KMeanCluster()
+{
+    int ModelIndex = 0;
+    GaussMixModel * tmpGMM;
+    tmpGMM=(GaussMixModel*)malloc(sizeof(GaussMixModel));
+    AllocGaussMixModel(tmpGMM,m_nMixNum,m_nVecSize);
+    for(int m=0;m<m_nMixNum;m++)
+    {
+        for(int j=0;j<m_nVecSize;j++)
+        {
+            tmpGMM[ModelIndex].pGauss[m].pfMean[j]=m_pGmmModel[ModelIndex].pGauss[m].pfMean[j];
+            m_pGmmModel[ModelIndex].pGauss[m].pfMean[j]=0.0f;
+        }
+
+        // 2007.09.17 plu : 
+        tmpGMM[ModelIndex].nMixNum = m_pGmmModel[ModelIndex].nMixNum;
+    }
+
+    if(m_WeightIndex) {
+        free(m_WeightIndex);
+        m_WeightIndex = NULL;
+    }
+    m_WeightIndex=(long *)malloc(sizeof(long)*m_pGmmModel[ModelIndex].nMixNum);
+    memset(m_WeightIndex,0,sizeof(long)*m_pGmmModel[ModelIndex].nMixNum);
+    long m_TotFrameNum=0;
+    
+    int fix = 0;
+    for(int fileIdx = 0; fileIdx < features->nFeatures; fileIdx++) {
+        int m_TempFrameNum = features->featureSize[fileIdx];
+        float * feat = features->features[fileIdx];
+
+        for(int f=0;f<m_TempFrameNum;f++)
+        {
+            float *tmpbuf=feat+f*m_nVecSize4;
+            int tmpIndex=SingleChoose(tmpbuf,tmpGMM,ModelIndex);
+            memberShip[fix++] = tmpIndex;
+            for(int j=0;j<m_nVecSize;j++)
+            {
+                m_pGmmModel[ModelIndex].pGauss[tmpIndex].pfMean[j]+=tmpbuf[j];
+            }
+            m_WeightIndex[tmpIndex]++;
+        }
+        m_TotFrameNum+=m_TempFrameNum;
+    }
+    FreeGaussMixModel(tmpGMM,m_nModelNum);
+    
+    for(int m=0;m<m_pGmmModel[ModelIndex].nMixNum;m++)
+    {
+        m_pGmmModel[ModelIndex].pfWeight[m]=float(m_WeightIndex[m])/float(m_TotFrameNum);
+    }
+}
+inline float cal(float * dimObjects, float * shared_clusters, int numObjs, int numClusters, int numDims, int ObjsIdx, int clusterIdx) {
+    float res = 0.0, tmp;
+    
+    for(int i = 0;i < numDims; i++) {
+        tmp = dimObjects[i * numObjs + ObjsIdx] - shared_clusters[i * numClusters + clusterIdx];
+        
+        res += tmp * tmp;
+    }
+    
+    return (res);
+}
+void KMean::GetKMeanModel2() {
+    cudaMemcpy(dimClusters[0], device_dimClusters, sizeof(float) * numClusters * numDims, cudaMemcpyDeviceToHost);
+    cudaMemcpy(clusterSize, device_clusterSize, sizeof(int) * numClusters, cudaMemcpyDeviceToHost);
+    cudaMemcpy(memberShip, device_memberShip, sizeof(int) * numObjs, cudaMemcpyDeviceToHost);
+    
+ //Y   for(int i = 0;i < numObjs;i++) {
+ //Y       int index = 0; 
+ //Y       
+ //Y       float a, b;
+ //Y       a = cal(dimObjects[0], dimClusters[0], numObjs, numClusters, numDims, i, 0);
+ //Y       for(int j = 1;j < numClusters; j++) {
+ //Y           b = cal(dimObjects[0], dimClusters[0], numObjs, numClusters, numDims, i, j);
+ //Y           if(b < a) {
+ //Y               index = j;
+ //Y               a = b;
+ //Y           }
+ //Y       }
+ //Y       memberShip[i] = index;
+ //Y   }
+ //Y
+  //  for(int i = 0;i < numClusters;i++) {
+  //      for(int j = 0;j < numDims; j++) {
+  //          m_pGmmModel[0].pGauss[i].pfMean[j] = 0;
+  //      }
+  //  }
+  //  
+    int ModelIndex = 0;
+  //  memset(clusterSize, 0, sizeof(int) * numClusters);
+  //  
+    int fix = 0;
+  //  
+  //  fix = 0;
+  //  for(int fileIdx = 0; fileIdx < features->nFeatures; fileIdx++) {
+  //      int m_TempFrameNum = features->featureSize[fileIdx];
+  //      float * feat = features->features[fileIdx];
+
+  //      for(int f=0;f<m_TempFrameNum;f++)
+  //      {
+  //          float *tmpbuf=feat+f*m_nVecSize4;
+  //          int index =  memberShip[fix ++];
+  //          
+  //          for(int di = 0;di < numDims;di++) {
+  //              m_pGmmModel[0].pGauss[index].pfMean[di] += tmpbuf[di];
+  //          }
+  //          clusterSize[index] ++;
+  // //         m_WeightIndex[tmpIndex]++;
+  //      }
+////        m_TotFrameNum+=m_TempFrameNum;
+  //  }
+    /*
+    for(int i = 0;i < numObjs; i++) {
+        int index = memberShip[i];
+        clusterSize[index]++;
+        for(int j = 0;j < numDims;j++) {
+            m_pGmmModel[ModelIndex].pGauss[index].pfMean[j] += dimObjects[j][i];
+        }
+    }
+    */
+    
+    printf("wengshtn %d %d\n", clusterSize[0], clusterSize[1]);
+    
+    for(int m=0;m<m_pGmmModel[ModelIndex].nMixNum;m++)
+    {
+        m_pGmmModel[0].pfWeight[m]=float(clusterSize[m])/float(numObjs);
+    }
+    for(int m=0;m<m_pGmmModel[0].nMixNum;m++)
+    {
+        for(int j=0;j<m_nVecSize;j++)
+        {	
+            m_pGmmModel[0].pGauss[m].pfMean[j] = dimClusters[0][j * numClusters + m];
+ //           m_pGmmModel[0].pGauss[m].pfMean[j] /= clusterSize[m];
+            m_pGmmModel[0].pGauss[m].pfDiagCov[j]=0.0f;
+        }
+    }
+
+    fix = 0;
+    for(int fileIdx = 0; fileIdx < features->nFeatures; fileIdx ++) {
+        int m_TempFrameNum = features->featureSize[fileIdx];
+        float * feat= features->features[fileIdx]; //(float*)malloc(sizeof(float)*m_TempFrameNum*m_nVecSize4);
+
+        for(int f=0;f<m_TempFrameNum;f++)
+        {
+            float *tmpbuf=feat+f*m_nVecSize4;
+            int tmpIndex=memberShip[fix++]; //SingleChoose(tmpbuf,m_pGmmModel,ModelIndex);
+            
+            for(int j=0;j<m_nVecSize;j++)
+            {
+                float t=tmpbuf[j] - m_pGmmModel[ModelIndex].pGauss[tmpIndex].pfMean[j];
+                m_pGmmModel[ModelIndex].pGauss[tmpIndex].pfDiagCov[j]+=t*t;
+            }
+        }
+    }
+    
+    for(int m=0;m<m_pGmmModel[ModelIndex].nMixNum;m++) {
+        m_pGmmModel[ModelIndex].pGauss[m].dMat=0.0;
+        for(int j=0;j<m_nVecSize;j++)
+        {
+            m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]/=clusterSize[m];
+            m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]=1.0/m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j];
+            m_pGmmModel[ModelIndex].pGauss[m].dMat+=log(m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]);
+        }
+        m_pGmmModel[ModelIndex].pGauss[m].dMat-=m_nVecSize*LOG2PI;
+        m_pGmmModel[ModelIndex].pGauss[m].dMat*=0.5;
+        m_pGmmModel[ModelIndex].pGauss[m].dMat+=log(m_pGmmModel[ModelIndex].pfWeight[m]);
+    }
+    
+    printf("wengshti  " );
+    for(int i = 0;i < 36; i++) 
+        printf(" %f", m_pGmmModel[0].pGauss[1].pfMean[i]);
+    puts("");
+    
+    printf("wengshtz  " );
+    for(int i = 0;i < 36; i++) 
+        printf(" %f", m_pGmmModel[0].pGauss[1].pfDiagCov[i]);
+    puts("");
+}
+
+void KMean::GetKMeanModel() {
+    printf("wengshtn %d %d\n", m_WeightIndex[0], m_WeightIndex[1]);
+    int ModelIndex = 0;
+    for(int m=0;m<m_pGmmModel[ModelIndex].nMixNum;m++)
+    {
+        for(int j=0;j<m_nVecSize;j++)
+        {	
+            m_pGmmModel[ModelIndex].pGauss[m].pfMean[j]/=m_WeightIndex[m];
+            m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]=0.0f;
+        }
+    }
+
+    int fix = 0;
+    for(int fileIdx = 0; fileIdx < features->nFeatures; fileIdx ++) {
+        int m_TempFrameNum = features->featureSize[fileIdx];
+        float * feat= features->features[fileIdx]; //(float*)malloc(sizeof(float)*m_TempFrameNum*m_nVecSize4);
+
+        for(int f=0;f<m_TempFrameNum;f++)
+        {
+            float *tmpbuf=feat+f*m_nVecSize4;
+            int tmpIndex=memberShip[fix++]; //SingleChoose(tmpbuf,m_pGmmModel,ModelIndex);
+            
+            for(int j=0;j<m_nVecSize;j++)
+            {
+                float t=tmpbuf[j] - m_pGmmModel[ModelIndex].pGauss[tmpIndex].pfMean[j];
+                m_pGmmModel[ModelIndex].pGauss[tmpIndex].pfDiagCov[j]+=t*t;
+            }
+        }
+    }
+    
+    for(int m=0;m<m_pGmmModel[ModelIndex].nMixNum;m++) {
+        m_pGmmModel[ModelIndex].pGauss[m].dMat=0.0;
+        for(int j=0;j<m_nVecSize;j++)
+        {
+            m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]/=m_WeightIndex[m];
+            m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]=1.0/m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j];
+            m_pGmmModel[ModelIndex].pGauss[m].dMat+=log(m_pGmmModel[ModelIndex].pGauss[m].pfDiagCov[j]);
+        }
+        m_pGmmModel[ModelIndex].pGauss[m].dMat-=m_nVecSize*LOG2PI;
+        m_pGmmModel[ModelIndex].pGauss[m].dMat*=0.5;
+        m_pGmmModel[ModelIndex].pGauss[m].dMat+=log(m_pGmmModel[ModelIndex].pfWeight[m]);
+    }
+    
+    printf("wengshti  " );
+    for(int i = 0;i < 36; i++) 
+        printf(" %f", m_pGmmModel[0].pGauss[1].pfMean[i]);
+    puts("");
+    
+    printf("wengshtz  " );
+    for(int i = 0;i < 36; i++) 
+        printf(" %f", m_pGmmModel[0].pGauss[1].pfDiagCov[i]);
+    puts("");
+}
+void KMean::DataPrepare(struct Features &features, int MaxMixNum) {
+    this->features = &features;
+
+    numDims = features.featureDim;
+
+    numObjs = 0;
+    for(int idx = 0;idx < features.nFeatures;idx++) {
+        numObjs += features.featureSize[idx];
+    }
+
+    Malloc2D(dimObjects, numDims, numObjs, float);
+
+    memberShip = (int *) malloc(sizeof(int) * numObjs);
+    cudaMalloc(&device_memberShip, sizeof(int) * numObjs);
+
+    int featureIdx = 0;
+    for(int idx = 0;idx < features.nFeatures; idx++) {
+        for(int idy = 0; idy < features.featureSize[idx]; idy ++) {
+            for(int idz = 0;idz < numDims; idz ++) {
+                dimObjects[idz][featureIdx] = features.features[idx][idy * numDims + idz];
+            }
+            featureIdx++;
+        }
+    }
+
+    Malloc2D(dimClusters, numDims, MaxMixNum, float);
+
+    cudaMalloc(&device_dimObjects, numObjs * numDims * sizeof(float));
+    cudaMalloc(&device_dimClusters, MaxMixNum * numDims * sizeof(float));
+
+    Malloc2D(dimDiagCovs, numDims, MaxMixNum, float);
+    cudaMalloc(&device_diagCovs, MaxMixNum * numDims * sizeof(float));
+
+    cudaMemcpy(device_dimObjects, dimObjects[0], numObjs * numDims * sizeof(float), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&device_clusterSize, MaxMixNum * sizeof(int));
+    clusterSize = (int *) malloc(MaxMixNum * sizeof(int));
+
+    dMats = (float *) malloc(MaxMixNum * sizeof(float));
+    cudaMalloc(&device_dMats, MaxMixNum * sizeof(float));
+}
+
+void KMean::KMeanInitalize() {
+    numClusters = m_nMixNum;
+
+    for(int j=0;j < numDims;j++) {
+        for(int m=0;m < numClusters;m++) {
+            dimClusters[0][j*numClusters + m] = m_pGmmModel[0].pGauss[m].pfMean[j];
+        }
+    }
+    
+//    printf("wengsht before");
+//    int m = 0;
+//    for(int j=0;j < numDims;j++) {
+//        printf("%f ", dimClusters[0][j * numClusters + m]);
+//    }
+//    puts("");
+
+    cudaMemcpy(device_dimClusters, dimClusters[0], numClusters * numDims * sizeof(float), cudaMemcpyHostToDevice);
+
+    /*
+       for(int m=0;m < numClusters;m++) {
+       for(int j=0;j < numDims;j++) {
+       printf("%f ", dimClusters[j][m]);
+       }
+       puts("");
+       }
+     */
+}
+void KMean::KMeanIteration() {
+    KMeanCluster2();
+}
+    
+void KMean::KMeanMain(int KMeanIterNum) {
+    KMeanInitalize();
+    for(int i=0;i < KMeanIterNum;i++) {
+        KMeanIteration();
+    }
+    GetKMeanModel2();
+    
+}

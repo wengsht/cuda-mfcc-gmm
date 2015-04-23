@@ -1,0 +1,9 @@
+
+
+ERROR_CODE(SP_RUNERROR, X, "Run Error")
+
+ERROR_CODE(SP_FEATURE_NOT_RAW, X, "Feature should be raw when apply this function")
+
+ERROR_CODE(SP_PATH_NOT_EXIT, X, "Path have not been recorded")
+
+ERROR_CODE(SP_LOAD_FAIL, X, "Load HMM Model Fail")

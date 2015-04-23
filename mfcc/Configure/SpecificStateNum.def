@@ -1,0 +1,64 @@
+#ifdef SpecificStateNum
+
+/*
+ONE:    W AX N
+TWO:    T UW
+THREE:  TH R IY
+FOUR:   F OW R
+FIVE:   F AY V
+SIX:    S IH K S
+SEVEN:  S EH V EH N
+EIGHT:  EY T
+NINE:   N AY N
+ZERO:   Z IY R OW
+OH: OW
+*/
+
+SpecificStateNum("zero",12)
+SpecificStateNum("one", 9)
+SpecificStateNum("two", 6)
+SpecificStateNum("three", 9)
+SpecificStateNum("four", 9)
+SpecificStateNum("five", 9)
+SpecificStateNum("six", 12)
+SpecificStateNum("seven", 15)
+SpecificStateNum("eight", 6)
+SpecificStateNum("nine", 9)
+SpecificStateNum("oh", 3)
+SpecificStateNum(TROPE TROPE_SILENCE, 2)
+
+/*
+SpecificStateNum("zero",5)
+SpecificStateNum("one", 5)
+SpecificStateNum("two", 5)
+SpecificStateNum("three", 5)
+SpecificStateNum("four", 5)
+SpecificStateNum("five", 5)
+SpecificStateNum("six", 5)
+SpecificStateNum("seven", 5)
+SpecificStateNum("eight", 5)
+SpecificStateNum("nine", 5)
+SpecificStateNum("oh", 3)
+SpecificStateNum(TROPE TROPE_SILENCE, 2)
+*/
+
+#undef SpecificStateNum
+#endif
+
+#include "configure_hmm.h"
+
+#ifdef SpecificPenalty
+SpecificPenalty("zero",1.0)
+SpecificPenalty("one", 1.0)
+SpecificPenalty("two", 1.0)
+SpecificPenalty("three", 1.0)
+SpecificPenalty("four", 1.0)
+SpecificPenalty("five", 1.0)
+SpecificPenalty("six", 1.0)
+SpecificPenalty("seven", 1.0)
+SpecificPenalty("eight", 1.0)
+SpecificPenalty("nine", 1.0)
+SpecificPenalty("ten", 1.0)
+SpecificPenalty(TROPE TROPE_SILENCE, 1.0)
+#undef SpecificPenalty
+#endif

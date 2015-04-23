@@ -1,0 +1,123 @@
+__global__ 
+void matrix_mul_kernel(d_type *sq_matrix_1, d_type *sq_matrix_2, d_type *sq_matrix_result, int dim_a, int dim_b, int dim_c) 
+{
+    /** 
+     *  A cuda thread will calculate 4 results, result[row][col[0~4]]
+     */
+    int row = by * dy + ty;
+    int col[COL_STEP]; 
+
+    col[0] = COL_STEP * bx * dx + tx;
+    col[1] = col[0] + BLOCK_SIZE;
+    col[2] = col[1] + BLOCK_SIZE;
+    col[3] = col[2] + BLOCK_SIZE;
+
+    /**
+     *  One shared copy of sq_matrix_1 can be used to calculate 4 blocks,
+     *  increase the utilization of share memory
+     */
+    __shared__ d_type s_a[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ d_type s_b[BLOCK_SIZE][BLOCK_SIZE][COL_STEP];
+
+    d_type val[COL_STEP] = {0.0, 0.0, 0.0, 0.0};
+
+    int rowIdx = row * dim_c;
+
+    /**
+     * pre calculate index of matrixes. 
+     */
+    int sq_matrix_1_index = rowIdx + tx;
+    int sq_matrix_2_index = (ty) * dim_c; 
+    int sq_matrix_1_step = BLOCK_SIZE;
+    int sq_matrix_2_step = BLOCK_SIZE * dim_c;
+
+    int ks, k;
+
+    /**
+     * pre fetch values into local memory. 
+     */
+    d_type preFetchA;
+    d_type * sb_sq_matrix_p = &(s_b[ty][tx][0]);
+
+    int K_STEP = COL_STEP * BLOCK_SIZE;
+    int ceil_ks;
+
+    d_type *s_b_sq_matrix_used;
+
+    /**
+     * ks is BLOCK_SIZE step length, and one iteration will calculate 4 block
+     */
+    for(ks = 0; ks <= dim_b-BLOCK_SIZE; ks += BLOCK_SIZE, sq_matrix_1_index += sq_matrix_1_step, sq_matrix_2_index += sq_matrix_2_step) {
+        /**
+         * fetch matrix1 and matrix2 into shared memory
+         */
+        s_a[ty][tx] = sq_matrix_1[sq_matrix_1_index];
+
+        sb_sq_matrix_p[0] = sq_matrix_2[sq_matrix_2_index + col[0]];
+        sb_sq_matrix_p[1] = sq_matrix_2[sq_matrix_2_index + col[1]];
+        sb_sq_matrix_p[2] = sq_matrix_2[sq_matrix_2_index + col[2]];
+        sb_sq_matrix_p[3] = sq_matrix_2[sq_matrix_2_index + col[3]];
+
+        __syncthreads();
+
+        s_b_sq_matrix_used = &(s_b[0][tx][0]);
+
+        for(k = 0; k < BLOCK_SIZE; k++) {
+            preFetchA = s_a[ty][k]; 
+            val[0] += preFetchA * s_b_sq_matrix_used[0];  
+            val[1] += preFetchA * s_b_sq_matrix_used[1]; 
+            val[2] += preFetchA * s_b_sq_matrix_used[2];
+            val[3] += preFetchA * s_b_sq_matrix_used[3];
+            s_b_sq_matrix_used += K_STEP; 
+        }
+
+        __syncthreads();
+    }
+
+    /**
+     * because the dimension is not always power of 2, we need to add a tail for the rest calculation
+     */
+    if(ks < dim_b) {
+        if(col[0] < dim_c && row < dim_a)
+            s_a[ty][tx] = sq_matrix_1[sq_matrix_1_index];
+
+        if(col[0] < dim_c && row < dim_a) 
+            sb_sq_matrix_p[0] = sq_matrix_2[sq_matrix_2_index + col[0]];
+        if(col[1] < dim_c && row < dim_a) 
+            sb_sq_matrix_p[1] = sq_matrix_2[sq_matrix_2_index + col[1]];
+        if(col[2] < dim_c && row < dim_a) 
+            sb_sq_matrix_p[2] = sq_matrix_2[sq_matrix_2_index + col[2]];
+        if(col[3] < dim_c && row < dim_a) 
+            sb_sq_matrix_p[3] = sq_matrix_2[sq_matrix_2_index + col[3]];
+
+        __syncthreads();
+        s_b_sq_matrix_used = &(s_b[0][tx][0]) - K_STEP;
+
+        ceil_ks = dim_b-ks;
+
+#pragma unroll 32
+        for(k=0; k < ceil_ks; k++) {
+            preFetchA = s_a[ty][k]; 
+            s_b_sq_matrix_used += K_STEP; 
+            val[0] += preFetchA * s_b_sq_matrix_used[0];  
+            val[1] += preFetchA * s_b_sq_matrix_used[1]; 
+            val[2] += preFetchA * s_b_sq_matrix_used[2];
+            val[3] += preFetchA * s_b_sq_matrix_used[3];
+        }
+        __syncthreads();
+    }
+
+    /**
+     * Write the results back to global memory
+     */
+    if(row >= dim_a) return;
+
+    if(col[0] < dim_c)
+        sq_matrix_result[rowIdx + col[0]] = val[0];
+    if(col[1] < dim_c)
+        sq_matrix_result[rowIdx + col[1]] = val[1];
+    if(col[2] < dim_c)
+        sq_matrix_result[rowIdx + col[2]] = val[2];
+    if(col[3] < dim_c)
+        sq_matrix_result[rowIdx + col[3]] = val[3];
+}
