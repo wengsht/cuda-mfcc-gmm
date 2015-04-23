@@ -1,12 +1,15 @@
 # Term Project for 18652 <How to Write Fast Code>
 
 `@Shitao Weng`: sweng@andrew.cmu.edu
+
 `@Shushan Chen`: shushanc@andrew.cmu.edu
 
 ## Preprequisite 
 
 `CUDA 6.5`
+
 `CMake 2.8+`
+
 `g++ (c++11 stardard)`
 
 ## Install 
@@ -133,7 +136,7 @@ After generating feature files for libsvm, we can use libsvm to classify the wav
 
 The MIT License (MIT)
 
-Copyright (c) <2015> Shitao Weng<sweng@andrew.cmu.edu>, Shushan Chen<shushanc@andrew.cmu.edu>
+Copyright (c) <2015> Shitao Weng(sweng@andrew.cmu.edu), Shushan Chen(shushanc@andrew.cmu.edu)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
