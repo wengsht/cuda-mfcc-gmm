@@ -1,4 +1,4 @@
-# Term Project for 18652 <How to Write Fast Code>
+# Term Project for 18652 (How to Write Fast Code)
 
 `@Shitao Weng`: sweng@andrew.cmu.edu
 
